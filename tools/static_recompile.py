@@ -538,13 +538,13 @@ class SH4Recompiler:
         if (opcode & 0xFF00) == 0x8900:
             disp = sext8(d8) * 2
             target = pc + 4 + disp
-            return f"if (cpu->sr & SR_T) goto L_{target:08X}; /* bt */", True, target, False
+            return f"/* bt 0x{target:08X} */", True, target, False
 
         # BF
         if (opcode & 0xFF00) == 0x8B00:
             disp = sext8(d8) * 2
             target = pc + 4 + disp
-            return f"if (!(cpu->sr & SR_T)) goto L_{target:08X}; /* bf */", True, target, False
+            return f"/* bf 0x{target:08X} */", True, target, False
 
         # BT/S
         if (opcode & 0xFF00) == 0x8D00:
@@ -756,15 +756,28 @@ class SH4Recompiler:
         if func_start < 0 or func_end > self.size:
             return None
 
-        # First pass: collect branch targets within this function
-        local_labels = set()
-        for offset in range(func_start, func_end - 1, 2):
-            opcode = self.read_u16(offset)
+        # First pass: collect branch targets and emittable addresses
+        branch_targets = set()
+        emittable_addrs = set()
+        offset = func_start
+        while offset < func_end - 1:
             pc = self.offset_to_addr(offset)
-            _, is_branch, target, _ = self.recompile_instruction(opcode, pc)
+            emittable_addrs.add(pc)
+            opcode = self.read_u16(offset)
+            _, is_branch, target, has_delay = self.recompile_instruction(opcode, pc)
             if is_branch and isinstance(target, int):
                 if func_addr <= target < func_info['end']:
-                    local_labels.add(target)
+                    branch_targets.add(target)
+            if has_delay:
+                # Delay slot instruction is also emittable
+                if offset + 2 < func_end:
+                    emittable_addrs.add(self.offset_to_addr(offset + 2))
+                offset += 4
+            else:
+                offset += 2
+
+        # Only label addresses that are both branch targets AND emittable
+        local_labels = branch_targets & emittable_addrs
 
         # Generate function name
         func_name = f"func_{func_addr:08X}"
@@ -772,6 +785,9 @@ class SH4Recompiler:
         # Second pass: generate C code
         lines = []
         lines.append(f"void {func_name}(SH4CPU *cpu) {{")
+
+        # Track which labels we've actually emitted
+        emitted_labels = set()
 
         offset = func_start
         while offset < func_end - 1:
@@ -781,14 +797,40 @@ class SH4Recompiler:
             # Insert label if this is a branch target
             if pc in local_labels:
                 lines.append(f"L_{pc:08X}:;")
+                emitted_labels.add(pc)
 
             code, is_branch, target, has_delay = self.recompile_instruction(opcode, pc)
+
+            # A target is "local" only if it has a label AND we can emit it
+            is_local = isinstance(target, int) and target in local_labels
+            is_external_func = isinstance(target, int) and not is_local
+
+            # Handle non-delay-slot branches first (BT, BF without /S)
+            if is_branch and not has_delay and isinstance(target, int):
+                if is_local:
+                    if "bt" in code:
+                        lines.append(f"    if (cpu->sr & SR_T) goto L_{target:08X}; /* bt */")
+                    elif "bf" in code:
+                        lines.append(f"    if (!(cpu->sr & SR_T)) goto L_{target:08X}; /* bf */")
+                else:
+                    # Branch target outside function - treat as conditional tail call
+                    if "bt" in code:
+                        lines.append(f"    if (cpu->sr & SR_T) {{ func_{target:08X}(cpu); return; }} /* bt tail */")
+                    elif "bf" in code:
+                        lines.append(f"    if (!(cpu->sr & SR_T)) {{ func_{target:08X}(cpu); return; }} /* bf tail */")
+                offset += 2
+                continue
 
             # Handle delay slots for branch instructions
             if has_delay and offset + 2 < func_end:
                 delay_opcode = self.read_u16(offset + 2)
                 delay_pc = self.offset_to_addr(offset + 2)
                 delay_code, _, _, _ = self.recompile_instruction(delay_opcode, delay_pc)
+
+                # Emit label at delay-slot position if needed
+                if delay_pc in local_labels:
+                    lines.append(f"L_{delay_pc:08X}:;")
+                    emitted_labels.add(delay_pc)
 
                 if target == "rts":
                     lines.append(f"    {delay_code} /* delay slot */")
@@ -797,9 +839,8 @@ class SH4Recompiler:
                     # BSR to a function
                     lines.append(f"    {delay_code} /* delay slot */")
                     lines.append(f"    func_{target:08X}(cpu); /* bsr */")
-                elif isinstance(target, int) and func_addr <= target < func_info['end']:
-                    # Local branch
-                    # Handle BT/S and BF/S
+                elif is_local:
+                    # Local branch (BRA, BT/S, BF/S within function)
                     if "bt/s" in code:
                         lines.append(f"    {{ int t = cpu->sr & SR_T;")
                         lines.append(f"    {delay_code} /* delay slot */")
@@ -809,13 +850,27 @@ class SH4Recompiler:
                         lines.append(f"    {delay_code} /* delay slot */")
                         lines.append(f"    if (!t) goto L_{target:08X}; }}")
                     else:
-                        # BRA
+                        # BRA local
                         lines.append(f"    {delay_code} /* delay slot */")
                         lines.append(f"    goto L_{target:08X};")
-                elif isinstance(target, int):
-                    # BSR/BRA to external function
-                    lines.append(f"    {delay_code} /* delay slot */")
-                    lines.append(f"    func_{target:08X}(cpu);")
+                elif is_external_func:
+                    # External branch/call
+                    if "bt/s" in code:
+                        lines.append(f"    {{ int t = cpu->sr & SR_T;")
+                        lines.append(f"    {delay_code} /* delay slot */")
+                        lines.append(f"    if (t) {{ func_{target:08X}(cpu); return; }} }} /* bt/s tail */")
+                    elif "bf/s" in code:
+                        lines.append(f"    {{ int t = cpu->sr & SR_T;")
+                        lines.append(f"    {delay_code} /* delay slot */")
+                        lines.append(f"    if (!t) {{ func_{target:08X}(cpu); return; }} }} /* bf/s tail */")
+                    elif "bsr" in code or "bra" not in code:
+                        # BSR external
+                        lines.append(f"    {delay_code} /* delay slot */")
+                        lines.append(f"    func_{target:08X}(cpu);")
+                    else:
+                        # BRA external (tail call)
+                        lines.append(f"    {delay_code} /* delay slot */")
+                        lines.append(f"    func_{target:08X}(cpu); return; /* bra tail */")
                 elif target == "indirect":
                     # JSR/JMP @Rn
                     if "jsr" in code or "bsrf" in code:
@@ -841,7 +896,24 @@ class SH4Recompiler:
             offset += 2
 
         lines.append("}")
-        return '\n'.join(lines)
+
+        # Post-process: replace any goto to non-existent labels with function calls
+        import re
+        result_lines = []
+        for line in lines:
+            m = re.search(r'goto L_([0-9A-Fa-f]{8})', line)
+            if m:
+                label_addr = int(m.group(1), 16)
+                if label_addr not in emitted_labels:
+                    # Replace goto with tail call
+                    line = re.sub(
+                        r'goto L_([0-9A-Fa-f]{8});',
+                        lambda match: f'{{ func_{match.group(1)}(cpu); return; }}',
+                        line
+                    )
+            result_lines.append(line)
+
+        return '\n'.join(result_lines)
 
     def generate_header(self, output_path):
         """Generate the function declarations header."""
