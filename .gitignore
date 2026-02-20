@@ -1,0 +1,32 @@
+# Original disc image files (copyrighted)
+*.bin
+*.cue
+*.gdi
+*.iso
+*.cdi
+
+# Extracted raw disc contents
+disc_extract/
+
+# Build artifacts
+build/
+*.o
+*.obj
+*.exe
+*.dll
+*.so
+*.dylib
+
+# IDE files
+.vs/
+.vscode/
+*.sln
+*.vcxproj*
+.idea/
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Temporary analysis files
+*.tmp
