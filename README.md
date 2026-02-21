@@ -136,6 +136,15 @@ Original Dreamcast disc contents (extracted from GD-ROM Track 3):
 - [x] Function dispatch table (binary search lookup)
 - [x] Multi-file output (24 source files, parallel compilation)
 
+### Phase 2.5: Build & Compilation 🔧
+- [x] CMake build system (MSVC / Visual Studio 17 2022)
+- [x] Multi-library split for parallel compilation (5 game libs)
+- [x] Label error post-processing (goto → function call conversion)
+- [x] Branch-outside-function → tail call conversion
+- [ ] Successful full compilation (in progress — large files take time with MSVC)
+- [ ] Linker pass (resolve undefined func_XXXXXXXX references via stubs)
+- [ ] First successful link & executable output
+
 ### Phase 3: CPU & Memory 🔧
 - [x] SH-4 CPU state structure (registers, FPU, system regs)
 - [x] Dreamcast memory map (16MB RAM, 8MB VRAM, 2MB AICA)
