@@ -11,7 +11,7 @@ endif()
 
 # Compiler flags
 if(MSVC)
-    add_compile_options(/W3 /O2 /fp:fast)
+    add_compile_options(/W3 /fp:fast /MP)
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 else()
     add_compile_options(-Wall -Wextra -O2 -ffast-math)
@@ -39,10 +39,14 @@ add_library(ct_core STATIC
     src/hal/dc_hardware.c
     src/platform/platform_sdl2.c
 )
+if(MSVC)
+    target_compile_options(ct_core PRIVATE /O2)
+endif()
 
 # ========== Recompiled game code ==========
 file(GLOB GAME_SOURCES src/game/game_code_*.c)
 list(APPEND GAME_SOURCES src/game/dispatch_table.c)
+list(APPEND GAME_SOURCES src/game/game_stubs.c)
 
 # Split game code into multiple libraries to speed up parallel compilation
 set(GAME_LIBS)
@@ -64,6 +68,9 @@ foreach(batch_num RANGE 0 ${NUM_BATCHES})
     if(BATCH_SOURCES)
         set(lib_name ct_game_${batch_num})
         add_library(${lib_name} STATIC ${BATCH_SOURCES})
+        if(MSVC)
+            target_compile_options(${lib_name} PRIVATE /O1)
+        endif()
         list(APPEND GAME_LIBS ${lib_name})
     endif()
 endforeach()
@@ -71,6 +78,13 @@ endforeach()
 # ========== Main executable ==========
 add_executable(crazytaxi src/main.c)
 target_link_libraries(crazytaxi ct_core ${GAME_LIBS})
+
+# Large stack for deep recompiled call chains
+if(MSVC)
+    target_link_options(crazytaxi PRIVATE /STACK:67108864)  # 64MB stack
+else()
+    target_link_options(crazytaxi PRIVATE -Wl,-z,stacksize=67108864)
+endif()
 
 if(SDL2_FOUND)
     target_link_libraries(crazytaxi ${SDL2_LIBRARIES})

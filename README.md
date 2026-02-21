@@ -136,14 +136,19 @@ Original Dreamcast disc contents (extracted from GD-ROM Track 3):
 - [x] Function dispatch table (binary search lookup)
 - [x] Multi-file output (24 source files, parallel compilation)
 
-### Phase 2.5: Build & Compilation 🔧
+### Phase 2.5: Build & Compilation ✅
 - [x] CMake build system (MSVC / Visual Studio 17 2022)
 - [x] Multi-library split for parallel compilation (5 game libs)
 - [x] Label error post-processing (goto → function call conversion)
 - [x] Branch-outside-function → tail call conversion
-- [ ] Successful full compilation (in progress — large files take time with MSVC)
-- [ ] Linker pass (resolve undefined func_XXXXXXXX references via stubs)
-- [ ] First successful link & executable output
+- [x] Successful full compilation (all 24 game source files + stubs compile)
+- [x] Stub generator for 5,693 undefined func references (BSR targets in data)
+- [x] Linker pass — all symbols resolved
+- [x] First successful link → **4.6 MB crazytaxi.exe** output
+- [x] Indirect jump/call dispatch fix (cpu->pc set for JMP/JSR @Rn, BRAF, BSRF)
+- [x] Self-tail-call → goto loop conversion (eliminates stack overflow from recursion)
+- [x] 64 MB stack size for deep recompiled call chains
+- [x] /MP multi-process MSVC compilation, /O1 for game code (faster builds)
 
 ### Phase 3: CPU & Memory 🔧
 - [x] SH-4 CPU state structure (registers, FPU, system regs)

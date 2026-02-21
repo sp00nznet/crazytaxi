@@ -42,7 +42,8 @@ static int load_game_binary(SH4CPU *cpu, const char *path) {
     fseek(f, 0, SEEK_SET);
 
     /* Load at 0x8C010000 (offset 0x010000 in RAM) */
-    uint32_t load_offset = GAME_LOAD_ADDR - DC_RAM_BASE;
+    /* Mask SH-4 virtual address to physical: P1 (0x8C) → physical (0x0C) */
+    uint32_t load_offset = (GAME_LOAD_ADDR & 0x1FFFFFFF) - DC_RAM_BASE;
     if (load_offset + size > DC_RAM_SIZE) {
         fprintf(stderr, "ERROR: Binary too large (%ld bytes)\n", size);
         fclose(f);
@@ -131,7 +132,7 @@ int main(int argc, char *argv[]) {
 
     /* Set initial CPU state */
     cpu.pc = GAME_LOAD_ADDR;
-    cpu.r[15] = 0x8C00F400; /* Stack pointer */
+    cpu.r[15] = 0x8C00F400u; /* Stack pointer (Dreamcast boot default) */
 
     printf("\nStarting game execution at 0x%08X...\n\n", cpu.pc);
 

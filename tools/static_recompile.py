@@ -560,19 +560,19 @@ class SH4Recompiler:
 
         # JMP @Rm
         if (opcode & 0xF0FF) == 0x402B:
-            return f"/* jmp @r{n} */", True, "indirect", True
+            return f"cpu->pc = cpu->r[{n}]; /* jmp @r{n} */", True, "indirect", True
 
         # JSR @Rm
         if (opcode & 0xF0FF) == 0x400B:
-            return f"cpu->pr = 0x{pc + 4:08X}u; /* jsr @r{n} */", True, "indirect", True
+            return f"cpu->pr = 0x{pc + 4:08X}u; cpu->pc = cpu->r[{n}]; /* jsr @r{n} */", True, "indirect", True
 
         # BRAF Rm
         if (opcode & 0xF0FF) == 0x0023:
-            return f"/* braf r{n} - target = PC+4+r{n} */", True, "indirect", True
+            return f"cpu->pc = 0x{pc + 4:08X}u + cpu->r[{n}]; /* braf r{n} */", True, "indirect", True
 
         # BSRF Rm
         if (opcode & 0xF0FF) == 0x0003:
-            return f"cpu->pr = 0x{pc + 4:08X}u; /* bsrf r{n} */", True, "indirect", True
+            return f"cpu->pr = 0x{pc + 4:08X}u; cpu->pc = 0x{pc + 4:08X}u + cpu->r[{n}]; /* bsrf r{n} */", True, "indirect", True
 
         # ---- Floating point ----
 
@@ -781,6 +781,10 @@ class SH4Recompiler:
 
         # Generate function name
         func_name = f"func_{func_addr:08X}"
+
+        # Always include function's own start address as a local label
+        # (needed for self-tail-call → goto conversion to avoid stack overflow)
+        local_labels.add(func_addr)
 
         # Second pass: generate C code
         lines = []
