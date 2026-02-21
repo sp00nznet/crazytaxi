@@ -14,6 +14,7 @@
 
 #include "recompiler/sh4_cpu.h"
 #include "hal/dc_hardware.h"
+#include "hal/pvr2.h"
 #include "platform/platform.h"
 #include "game/game_functions.h"
 #include <stdio.h>
@@ -27,8 +28,9 @@
 /* Game data directory */
 #define GAME_DATA_DIR "disc_extract"
 
-/* External: set hardware reference in CPU module */
+/* External: set hardware/CPU reference in CPU module */
 extern void sh4_set_hardware(DCHardware *hw);
+extern void sh4_set_cpu_ref(SH4CPU *cpu);
 
 static int load_game_binary(SH4CPU *cpu, const char *path) {
     FILE *f = fopen(path, "rb");
@@ -106,6 +108,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     sh4_set_hardware(hw);
+    sh4_set_cpu_ref(&cpu);
 
     /* Initialize hardware subsystems */
     dc_pvr_init(hw);
@@ -130,14 +133,40 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    /* Set initial CPU state */
-    cpu.pc = GAME_LOAD_ADDR;
-    cpu.r[15] = 0x8C00F400u; /* Stack pointer (Dreamcast boot default) */
+    /* Initialize PVR2 TA + renderer */
+    pvr2_ta_init();
+    if (pvr2_render_init(DC_SCREEN_WIDTH, DC_SCREEN_HEIGHT) < 0) {
+        fprintf(stderr, "WARNING: PVR2 renderer init failed (running without rendering)\n");
+    }
 
-    printf("\nStarting game execution at 0x%08X...\n\n", cpu.pc);
+    /* Set initial CPU state - bypass BIOS bootstrap, call game init directly.
+     * The original bootstrap at 0x8C010000 copies code to 0x8C004000 and
+     * reads BIOS dispatch tables we don't have. Instead we call the game's
+     * own initialization function directly.
+     */
+    cpu.pc = 0x8C148962;
+    cpu.r[15] = 0x8C00FC00u; /* Stack pointer */
+    cpu.vbr = 0x8C00F400u;   /* Vector Base Register */
+    cpu.r[2] = 0x8C000000u;  /* r2 needs to point to readable memory */
+    cpu.sr = 0x700000F0u;     /* Supervisor mode, interrupts masked */
 
-    /* Execute the game entry point */
-    func_8C010000(&cpu);
+    /* Fill 0x8C00C000-0x8C00F400 with "SEGA" pattern (normally done by BIOS) */
+    {
+        uint32_t sega = 0x41474553u; /* "SEGA" little-endian */
+        uint32_t fill_start = (0x8C00C000 & 0x1FFFFFFF) - DC_RAM_BASE;
+        uint32_t fill_end = (0x8C00F400 & 0x1FFFFFFF) - DC_RAM_BASE;
+        for (uint32_t off = fill_start; off < fill_end; off += 4) {
+            memcpy(cpu.ram + off, &sega, 4);
+        }
+    }
+
+    printf("\nStarting game execution at 0x%08X (bypassing bootstrap)...\n", cpu.pc);
+    fflush(stdout);
+
+    /* Execute the game's main init function directly */
+    func_8C148962(&cpu);
+    printf("[MAIN] func_8C148962 returned\n");
+    fflush(stdout);
 
     /* Main game loop */
     uint64_t last_time = platform_get_ticks_ms();
@@ -176,6 +205,8 @@ int main(int argc, char *argv[]) {
     }
 
     printf("\nShutting down...\n");
+    pvr2_render_destroy();
+    pvr2_ta_destroy();
     platform_shutdown();
     dc_hw_destroy(hw);
     sh4_destroy(&cpu);

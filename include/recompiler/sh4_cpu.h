@@ -95,6 +95,27 @@ typedef struct SH4CPU {
     uint8_t *vram;      /* Video RAM (8 MB) */
     uint8_t *aica_ram;  /* AICA Sound RAM (2 MB) */
 
+    /* Store Queues (two 32-byte queues for DMA to VRAM/TA) */
+    uint32_t sq[2][8];  /* SQ0 and SQ1, 8 words each */
+    uint32_t qacr[2];   /* Queue Address Control Registers */
+
+    /* P4 on-chip registers (DMAC, TMU, etc.) */
+    /* DMAC: 0xFFA00000-0xFFA00044 */
+    uint32_t dmac_regs[17]; /* SAR0..CHCR3 (16 regs) + DMAOR */
+    /* TMU: 0xFFD80000-0xFFD8002C */
+    uint32_t tmu_regs[12];  /* TOCR, TSTR, TCOR0, TCNT0, TCR0, ... */
+
+    /* MMU state */
+    uint32_t mmucr;         /* MMU Control Register (0xFF000010) */
+
+    /* UTLB entries (64 entries) */
+    /* Address array: VPN[31:10], D[9], V[8], ASID[7:0] */
+    uint32_t utlb_addr[64];
+    /* Data array 1: PPN[28:10], PR[6:5], SZ1[7], SZ0[4], C[3], D[2], SH[1], WT[0] */
+    uint32_t utlb_data1[64];
+    /* Data array 2: TC, SA */
+    uint32_t utlb_data2[64];
+
     /* Execution state */
     bool running;
     uint64_t cycles;
@@ -125,6 +146,9 @@ static inline bool sh4_get_t(SH4CPU *cpu) { return (cpu->sr & SR_T) != 0; }
 static inline void sh4_set_t(SH4CPU *cpu, bool v) {
     if (v) cpu->sr |= SR_T; else cpu->sr &= ~SR_T;
 }
+
+/* Store Queue prefetch (flush SQ to external memory) */
+void sh4_sq_prefetch(SH4CPU *cpu, uint32_t addr);
 
 /* FPSCR helpers */
 static inline bool sh4_get_sz(SH4CPU *cpu) { return (cpu->fpscr & FPSCR_SZ) != 0; }

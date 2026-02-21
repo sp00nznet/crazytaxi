@@ -91,8 +91,8 @@ void platform_sleep_ms(uint32_t ms) {
 
 #else /* HAS_SDL2 */
 
-#include <SDL2/SDL.h>
-#include <SDL2/SDL_opengl.h>
+#include <SDL.h>
+#include <SDL_opengl.h>
 
 static SDL_Window *g_window = NULL;
 static SDL_GLContext g_gl_context = NULL;

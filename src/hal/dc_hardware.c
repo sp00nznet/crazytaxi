@@ -6,6 +6,8 @@
  */
 
 #include "hal/dc_hardware.h"
+#include "hal/pvr2.h"
+#include "platform/platform.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -43,6 +45,7 @@ struct DCHardware {
 
     /* Timing */
     uint64_t vblank_count;
+    uint64_t last_vblank_time;
 };
 
 /* Register offset calculation */
@@ -82,11 +85,37 @@ void dc_hw_destroy(DCHardware *hw) {
     }
 }
 
+/* Polling detector state */
+static uint32_t poll_last_addr = 0;
+static int poll_count = 0;
+static int poll_reported = 0;
+
 uint32_t dc_hw_read32(DCHardware *hw, uint32_t addr) {
     if (!hw) return 0;
 
     /* Strip P2 area bits if present */
     uint32_t phys = addr & 0x1FFFFFFF;
+
+    /* Detect polling loops */
+    if (phys == poll_last_addr) {
+        poll_count++;
+        if (poll_count == 100 && poll_reported < 20) {
+            poll_reported++;
+            printf("[POLL] register 0x%08X read 100+ times\n", phys);
+        }
+        if (poll_count == 10000 && poll_reported < 30) {
+            poll_reported++;
+            printf("[POLL] register 0x%08X read 10000+ times — game is stuck!\n", phys);
+        }
+    } else {
+        if (poll_count >= 100 && poll_reported < 30) {
+            poll_reported++;
+            printf("[POLL] register 0x%08X polled %d times, moving to 0x%08X\n",
+                   poll_last_addr, poll_count, phys);
+        }
+        poll_last_addr = phys;
+        poll_count = 1;
+    }
 
     switch (phys) {
     case PVR_ID:
@@ -95,8 +124,16 @@ uint32_t dc_hw_read32(DCHardware *hw, uint32_t addr) {
     case PVR_REVISION:
         return 0x00000011;  /* Revision 1.1 */
 
-    case SB_ISTNRM:
+    case SB_ISTNRM: {
+        /* Auto-generate VBlank signal based on timing (~60Hz) */
+        uint64_t now = platform_get_ticks_ms();
+        if (now - hw->last_vblank_time >= 16) {
+            hw->sb_istnrm |= (1 << 3);  /* VBlank-IN */
+            hw->last_vblank_time = now;
+            hw->vblank_count++;
+        }
         return hw->sb_istnrm;
+    }
 
     case SB_ISTEXT:
         return hw->sb_istext;
@@ -120,10 +157,24 @@ uint32_t dc_hw_read32(DCHardware *hw, uint32_t addr) {
     return 0;
 }
 
+static int hw_write_log = 0;
+
+/* Forward declaration - needed for PVR DMA */
+extern uint8_t *sh4_get_ram_ptr(void);
+
 void dc_hw_write32(DCHardware *hw, uint32_t addr, uint32_t val) {
     if (!hw) return;
 
     uint32_t phys = addr & 0x1FFFFFFF;
+
+    if (hw_write_log < 100) {
+        hw_write_log++;
+        printf("[HW] write32 phys=0x%08X val=0x%08X\n", phys, val);
+    }
+    /* Always log DMA-related writes */
+    if (phys >= 0x005F7C00 && phys <= 0x005F7C18) {
+        printf("[PVR-DMA] write 0x%08X = 0x%08X\n", phys, val);
+    }
 
     switch (phys) {
     case PVR_SOFTRESET:
@@ -135,8 +186,21 @@ void dc_hw_write32(DCHardware *hw, uint32_t addr, uint32_t val) {
     case PVR_STARTRENDER:
         hw->pvr_rendering = true;
         hw->frame_count++;
+        if (hw->frame_count <= 3) {
+            int pkts, verts, polys;
+            pvr2_ta_get_stats(&pkts, &verts, &polys);
+            printf("[PVR] STARTRENDER frame %d: %d packets, %d verts, %d polys\n",
+                   hw->frame_count, pkts, verts, polys);
+        }
+        /* Render submitted geometry via OpenGL */
+        pvr2_render_frame();
+        platform_swap_buffers();
+        pvr2_ta_reset();
+        /* Poll input events to keep window responsive */
+        platform_poll_events(hw);
         /* Signal render complete via interrupt */
         hw->sb_istnrm |= (1 << 2); /* Render complete */
+        hw->pvr_rendering = false;
         break;
 
     case PVR_FB_ADDR1:
@@ -171,6 +235,51 @@ void dc_hw_write32(DCHardware *hw, uint32_t addr, uint32_t val) {
 
     case TA_LIST_INIT:
         hw->ta_fifo_pos = 0;
+        pvr2_ta_reset();
+        break;
+
+    case SB_C2DST:
+        if (val & 1) {
+            /* CH2-DMA: system RAM → PVR (TA FIFO or VRAM) */
+            uint32_t c2d_dest = hw->hw_regs[hw_reg_idx(SB_C2DSTAT)];
+            uint32_t c2d_len  = hw->hw_regs[hw_reg_idx(SB_C2DLEN)];
+            printf("[CH2-DMA] TRIGGER: dest=0x%08X len=%u\n", c2d_dest, c2d_len);
+            /* CH2-DMA source is implicitly from SB_C2DSTAT register chain */
+            /* For TA writes, the data comes from system RAM via descriptor list */
+            hw->sb_istnrm |= (1 << 19); /* DMA complete interrupt */
+            hw->hw_regs[hw_reg_idx(SB_C2DST)] = 0;
+        }
+        break;
+
+    case SB_SDST:
+        if (val & 1) {
+            /* Sort-DMA: system RAM → TA with sorting */
+            uint32_t sd_tag  = hw->hw_regs[hw_reg_idx(SB_SDSTAG)];
+            uint32_t sd_star = hw->hw_regs[hw_reg_idx(SB_SDSTAR)];
+            uint32_t sd_len  = hw->hw_regs[hw_reg_idx(SB_SDLEN)];
+            uint32_t sd_dir  = hw->hw_regs[hw_reg_idx(SB_SDDIR)];
+            printf("[SORT-DMA] TRIGGER: tag=0x%08X star=0x%08X len=%u dir=%u\n",
+                   sd_tag, sd_star, sd_len, sd_dir);
+            if (sd_dir == 0 && sd_len > 0) {
+                uint8_t *ram = sh4_get_ram_ptr();
+                if (ram) {
+                    /* Sort-DMA uses a table of pointers (sort table) to
+                     * traverse linked list entries and send to TA in sorted order.
+                     * For now, do a simple linear DMA from sd_star to TA. */
+                    uint32_t ram_offset = sd_star & 0x00FFFFFF;
+                    int packets = 0;
+                    for (uint32_t off = 0; off + 32 <= sd_len; off += 32) {
+                        const uint32_t *pkt = (const uint32_t *)(ram + ram_offset + off);
+                        pvr2_ta_write(pkt);
+                        packets++;
+                    }
+                    printf("[SORT-DMA] Sent %d packets (%u bytes) to TA\n",
+                           packets, sd_len);
+                }
+            }
+            hw->sb_istnrm |= (1 << 13); /* Sort-DMA complete interrupt */
+            hw->hw_regs[hw_reg_idx(SB_SDST)] = 0;
+        }
         break;
 
     case MAPLE_DMA_START:
@@ -180,14 +289,67 @@ void dc_hw_write32(DCHardware *hw, uint32_t addr, uint32_t val) {
         }
         break;
 
+    case SB_PDST:
+        if (val & 1) {
+            /* PVR DMA trigger - transfer data from system RAM to TA FIFO */
+            uint32_t pvr_addr = hw->hw_regs[hw_reg_idx(SB_PDSTAP)];
+            uint32_t sys_addr = hw->hw_regs[hw_reg_idx(SB_PDSTAR)];
+            uint32_t length   = hw->hw_regs[hw_reg_idx(SB_PDLEN)];
+            uint32_t dir      = hw->hw_regs[hw_reg_idx(SB_PDDIR)];
+            printf("[PVR-DMA] TRIGGER: sys=0x%08X pvr=0x%08X len=%u dir=%u\n",
+                   sys_addr, pvr_addr, length, dir);
+            if (dir == 0 && length > 0) {
+                /* DMA to PVR (TA FIFO or VRAM) */
+                uint8_t *ram = sh4_get_ram_ptr();
+                if (ram) {
+                    /* System address needs P1/P2 strip */
+                    uint32_t ram_offset = sys_addr & 0x00FFFFFF;
+                    uint32_t bytes = length;
+                    int packets = 0;
+                    if (pvr_addr >= 0x10000000 && pvr_addr < 0x10800000) {
+                        /* DMA to TA FIFO - send as 32-byte packets */
+                        for (uint32_t off = 0; off + 32 <= bytes; off += 32) {
+                            const uint32_t *pkt = (const uint32_t *)(ram + ram_offset + off);
+                            pvr2_ta_write(pkt);
+                            packets++;
+                        }
+                        printf("[PVR-DMA] Sent %d packets (%u bytes) to TA FIFO\n",
+                               packets, bytes);
+                    } else {
+                        printf("[PVR-DMA] Non-TA destination 0x%08X (len=%u) - TODO\n",
+                               pvr_addr, bytes);
+                    }
+                }
+            }
+            /* Signal DMA complete */
+            hw->sb_istnrm |= (1 << 19); /* PVR DMA complete interrupt */
+            hw->hw_regs[hw_reg_idx(SB_PDST)] = 0; /* Clear start bit */
+        }
+        break;
+
     default:
         if (phys >= 0x005F6800 && phys < 0x005FA000) {
             hw->hw_regs[hw_reg_idx(phys)] = val;
         }
-        /* TA FIFO writes (0x10000000 - 0x107FFFFF) */
+        /* TA FIFO writes (0x10000000 - 0x107FFFFF)
+         * Direct word-by-word writes accumulate into 32-byte packets.
+         * NOTE: Only process if TA list has been initialized (ta_fifo_pos >= 0).
+         * Scattered writes to random offsets are likely VRAM/texture ops, not TA. */
         if (phys >= 0x10000000 && phys < 0x10800000) {
-            hw->ta_fifo[hw->ta_fifo_pos & 31] = val;
+            static int ta_direct_count = 0;
+            ta_direct_count++;
+            if (ta_direct_count <= 5) {
+                printf("[TA-DIRECT] word #%d to 0x%08X val=0x%08X (fifo_pos=%d)\n",
+                       ta_direct_count, phys, val, hw->ta_fifo_pos);
+            } else if (ta_direct_count == 1000) {
+                printf("[TA-DIRECT] 1000 direct writes to TA range (suppressing)\n");
+            }
+            /* Accumulate into FIFO and dispatch 32-byte packets */
+            hw->ta_fifo[hw->ta_fifo_pos & 7] = val;
             hw->ta_fifo_pos++;
+            if ((hw->ta_fifo_pos & 7) == 0) {
+                pvr2_ta_write(hw->ta_fifo);
+            }
         }
         break;
     }

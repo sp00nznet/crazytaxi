@@ -76,8 +76,94 @@ class SH4Recompiler:
 
         self.call_targets = call_targets
 
+        # Forced entry points (code not detected by prologue/BSR analysis)
+        # These are reached via indirect jumps (JMP @Rn) or from BIOS dispatch
+        forced_entries = {
+            self.base + 0x100,    # 0x8C010100: relocated bootstrap entry point
+            0x8C148990,           # Main loop entry (BRA target from init)
+            0x8C14ACEE,           # Init function (JMP target from func_8C148988)
+            0x8C14AD46,           # Main game loop (JMP target from func_8C148990)
+            0x8C02A808,           # Indirect JSR target from game init
+            0x8C02A698,           # Game main() - dead code entry in func_8C02A680
+            0x8C02A6EC,           # Game main loop body (BRA target from func_8C02A760)
+            # Functions detected as unresolved indirect call targets at runtime:
+            0x8C080BA4,           # memcmp (CRT0 runtime)
+            0x8C07A870,           # Hardware init (writes constants)
+            0x8C07A570,           # Veneer (BRA to 0x8C07A4A0 with r4=0)
+            0x8C07A580,           # Setter (writes to TA FIFO base)
+            0x8C07A590,           # Setter (writes r5 to memory, returns 1)
+            0x8C073B10,           # Veneer (BRA to 0x8C073910 with r7=0)
+            0x8C073910,           # Target of 0x8C073B10 veneer
+            0x8C07A4A0,           # Target of 0x8C07A570 veneer
+            0x8C15ED94,           # SDK runtime function (called ~80x per frame)
+            0x8C15EA50,           # SDK runtime function
+            0x8C15EC28,           # SDK runtime function
+            0x8C14D214,           # Init function
+            0x8C15F258,           # SDK runtime function
+            0x8C15E56C,           # SDK runtime function
+            0x8C15EEDC,           # SDK runtime function
+            0x8C07A5A0,           # Setter function (near 0x8C07A590)
+            0x8C14D240,           # Cache flush continuation (P2 jump target from func_8C14D214)
+            # Session 3: unresolved targets discovered at runtime
+            0x8C087E9C,           # Init helper (called frequently from 0x8C0875F4)
+            0x8C1566A0,           # SDK/init function
+            0x8C15B282,           # SDK function (called via jsr @r3)
+            0x8C15B27C,           # SDK function (called via jsr @r3)
+            0x8C16C138,           # SDK runtime function
+            0x8C07A5F0,           # Setter function (near 0x8C07A5A0)
+            0x8C07A600,           # Setter function
+            0x8C07A610,           # Setter function (called ~9 times)
+            0x8C07A630,           # Setter function
+            0x8C1587BA,           # SDK function
+            0x8C15645C,           # SDK function
+            0x8C14B434,           # Init function
+            0x8C14BB4C,           # Init function
+            0x8C16C300,           # SDK runtime function
+            0x8C16F5FC,           # SDK runtime function
+            0x8C1564C6,           # PVR register write helper
+            # Session 3 round 2: more unresolved targets
+            0x8C153160,           # SDK function
+            0x8C156080,           # SDK function
+            0x8C15B368,           # SDK function
+            0x8C16DF10,           # SDK function
+            0x8C150246,           # Init function
+            0x8C080B2E,           # CRT function
+            0x8C073EB0,           # Game init function
+            0x8C074050,           # Game init function
+            0x8C075820,           # Game function
+            0x8C086BD8,           # Game function
+            0x8C156406,           # Rendering callback registration?
+        }
+
+        # Also scan for mov.l @(disp,PC) + JMP @Rn patterns to find indirect targets
+        for i in range(0, len(self.data) - 4, 2):
+            pc = self.base + i
+            op = self.data[i] | (self.data[i+1] << 8)
+            # Look for JMP @Rn (0100nnnn00101011) or JSR @Rn (0100nnnn00001011)
+            if (op & 0xF0FF) == 0x400B or (op & 0xF0FF) == 0x402B:
+                rn = (op >> 8) & 0xF
+                # Look back for mov.l @(disp,PC), Rn to find the target
+                for j in range(max(0, i - 20), i, 2):
+                    prev = self.data[j] | (self.data[j+1] << 8)
+                    if (prev & 0xF000) == 0xD000 and ((prev >> 8) & 0xF) == rn:
+                        disp = prev & 0xFF
+                        lit_addr = ((self.base + j) & 0xFFFFFFFC) + 4 + disp * 4
+                        lit_off = lit_addr - self.base
+                        if 0 <= lit_off < len(self.data) - 3:
+                            target = (self.data[lit_off] | (self.data[lit_off+1] << 8) |
+                                     (self.data[lit_off+2] << 16) | (self.data[lit_off+3] << 24))
+                            # Convert physical to cached address
+                            if 0x0C000000 <= target < 0x0D000000:
+                                target = target | 0x80000000
+                            if self.base <= target < self.base + self.size:
+                                forced_entries.add(target)
+                        break
+        for addr in forced_entries:
+            if self.base <= addr < self.base + self.size:
+                print(f"  Forced entry point: 0x{addr:08X}")
+
         # Combine entry points
-        all_entries = sorted(set([self.base]) | call_targets | prologue_addrs)
+        all_entries = sorted(set([self.base]) | call_targets | prologue_addrs | forced_entries)
 
         # Filter to valid range
         all_entries = [a for a in all_entries if self.base <= a < self.base + self.size]
@@ -165,9 +251,9 @@ class SH4Recompiler:
                 return f"cpu->r[{n}] = (int32_t)(int16_t)0x{val:04X}u; /* {sval} @0x{addr:08X} */", False, None, False
             return f"cpu->r[{n}] = (int32_t)(int16_t)sh4_read16(cpu, 0x{addr:08X}u);", False, None, False
 
-        # ---- MOV.L Rm, @Rn ----
+        # ---- MOV.L Rm, @-Rn ---- (0010nnnnmmmm0110)
         if (opcode & 0xF00F) == 0x2006:
-            return f"sh4_write32(cpu, cpu->r[{n}], cpu->r[{m}]);", False, None, False
+            return f"cpu->r[{n}] -= 4; sh4_write32(cpu, cpu->r[{n}], cpu->r[{m}]);", False, None, False
 
         # ---- MOV.L @Rm, Rn ----
         if (opcode & 0xF00F) == 0x6002:
@@ -178,10 +264,6 @@ class SH4Recompiler:
             if n == m:
                 return f"cpu->r[{n}] = sh4_read32(cpu, cpu->r[{m}]); cpu->r[{n}] += 4;", False, None, False
             return f"cpu->r[{n}] = sh4_read32(cpu, cpu->r[{m}]); cpu->r[{m}] += 4;", False, None, False
-
-        # ---- MOV.L Rm, @-Rn ----
-        if (opcode & 0xF00F) == 0x2006:
-            pass  # Already handled above
 
         # ---- MOV.L Rm, @(disp,Rn) ----
         if (opcode & 0xF000) == 0x1000:
@@ -228,23 +310,6 @@ class SH4Recompiler:
         # ---- MOV.W Rm, @-Rn ----
         if (opcode & 0xF00F) == 0x2005:
             return f"cpu->r[{n}] -= 2; sh4_write16(cpu, cpu->r[{n}], (uint16_t)cpu->r[{m}]);", False, None, False
-
-        # ---- MOV.L Rm, @-Rn ---- (0010nnnnmmmm0110 is already MOV.L Rm, @Rn above... need to check)
-        # Actually 0010nnnnmmmm0110 = MOV.L Rm, @Rn
-        # MOV.L Rm, @-Rn = 0010nnnnmmmm0110... No, let me check.
-        # MOV.L Rm, @-Rn should be different. Let me check the encoding:
-        # MOV.L Rm, @Rn  = 0010nnnnmmmm0110
-        # MOV.L Rm, @-Rn = 0010nnnnmmmm0110... these are the same! That can't be right.
-        # Actually: MOV.L Rm, @-Rn is 0010nnnnmmmm0110 NO
-        # Let me look this up properly:
-        # MOV.L Rm, @Rn   = 0010nnnnmmmm0010 (note: 0010 at end, not 0110)
-        # MOV.L @Rm, Rn   = 0110nnnnmmmm0010
-        # MOV.L Rm, @-Rn  = 0010nnnnmmmm0110
-        # MOV.L @Rm+, Rn  = 0110nnnnmmmm0110
-        # So 0x2006 IS MOV.L Rm, @-Rn!
-
-        # Fix: re-handle 0x2006 as MOV.L Rm, @-Rn and 0x2002 as MOV.L Rm, @Rn
-        # This requires restructuring. For now, handle via the pattern matching order.
 
         # ---- MOV.B R0, @(disp,Rn) ----
         if (opcode & 0xFF00) == 0x8000:
@@ -670,7 +735,7 @@ class SH4Recompiler:
 
         # ---- PREF/OCBI/OCBP/OCBWB (cache ops - mostly NOPs in recompilation) ----
         if (opcode & 0xF0FF) == 0x0083:  # PREF
-            return f"/* pref @r{n} - prefetch (nop) */", False, None, False
+            return f"sh4_sq_prefetch(cpu, cpu->r[{n}]);", False, None, False
         if (opcode & 0xF0FF) == 0x0093:  # OCBI
             return f"/* ocbi @r{n} (nop) */", False, None, False
         if (opcode & 0xF0FF) == 0x00A3:  # OCBP
@@ -748,7 +813,7 @@ class SH4Recompiler:
         # ---- Default: unknown instruction ----
         return f"/* UNKNOWN: 0x{opcode:04X} at 0x{pc:08X} */", False, None, False
 
-    def recompile_function(self, func_addr, func_info):
+    def recompile_function(self, func_addr, func_info, next_func_addr=None):
         """Recompile a single function to C code."""
         func_start = self.addr_to_offset(func_addr)
         func_end = self.addr_to_offset(func_info['end'])
@@ -899,6 +964,23 @@ class SH4Recompiler:
             lines.append(f"    {code}")
             offset += 2
 
+        # Check if function needs fall-through to next function
+        # Find last non-empty code line
+        if next_func_addr is not None:
+            last_code = ""
+            for l in reversed(lines):
+                stripped = l.strip()
+                if stripped and not stripped.startswith("L_") and stripped != "{":
+                    last_code = stripped
+                    break
+            # If last line is not a terminator, add fall-through call
+            if (last_code and
+                not last_code.endswith("return;") and
+                not last_code.endswith("return; }") and
+                not last_code.startswith("goto ") and
+                not last_code.startswith("return;")):
+                lines.append(f"    func_{next_func_addr:08X}(cpu); /* fall-through */")
+
         lines.append("}")
 
         # Post-process: replace any goto to non-existent labels with function calls
@@ -968,14 +1050,33 @@ class SH4Recompiler:
             f.write("    return NULL;\n")
             f.write("}\n\n")
 
+            f.write("#include <stdio.h>\n")
+            f.write("static int unresolved_log = 0;\n\n")
             f.write("void sh4_call_indirect(SH4CPU *cpu) {\n")
-            f.write("    void (*fn)(SH4CPU *cpu) = find_function(cpu->pc);\n")
+            f.write("    /* Normalize: strip P1/P2/P3 area bits to P1 cached form */\n")
+            f.write("    uint32_t phys = cpu->pc & 0x1FFFFFFF;\n")
+            f.write("    uint32_t lookup = phys | 0x80000000;\n")
+            f.write("    void (*fn)(SH4CPU *cpu) = find_function(lookup);\n")
+            f.write("    if (!fn) {\n")
+            f.write("        /* Handle relocated bootstrap: 0x0C004000-0x0C008000 -> +0xC100 */\n")
+            f.write("        if (phys >= 0x0C004000 && phys < 0x0C008000) {\n")
+            f.write("            fn = find_function((phys + 0xC100) | 0x80000000);\n")
+            f.write("        }\n")
+            f.write("    }\n")
             f.write("    if (fn) { fn(cpu); }\n")
-            f.write("    else { /* unresolved indirect call */ }\n")
+            f.write("    else {\n")
+            f.write("        /* BIOS/Boot ROM calls & null pointers - no-op */\n")
+            f.write("        if (phys < 0x00200000) return;\n")
+            f.write("        if (unresolved_log < 100) {\n")
+            f.write("            unresolved_log++;\n")
+            f.write("            printf(\"[DISPATCH] unresolved call to 0x%08X (pr=0x%08X)\\n\",\n")
+            f.write("                   cpu->pc, cpu->pr);\n")
+            f.write("        }\n")
+            f.write("    }\n")
             f.write("}\n\n")
 
             f.write("void sh4_jump_indirect(SH4CPU *cpu) {\n")
-            f.write("    sh4_call_indirect(cpu); /* same dispatch */\n")
+            f.write("    sh4_call_indirect(cpu);\n")
             f.write("}\n")
 
     def recompile_all(self, output_dir, batch_size=500):
@@ -998,8 +1099,13 @@ class SH4Recompiler:
                 f.write(f"#include \"game/game_functions.h\"\n")
                 f.write(f"#include <math.h>\n\n")
 
-                for addr, info in batch:
-                    code = self.recompile_function(addr, info)
+                for batch_idx, (addr, info) in enumerate(batch):
+                    # Determine next function address for fall-through
+                    global_idx = func_idx + batch_idx
+                    next_addr = None
+                    if global_idx + 1 < total_funcs:
+                        next_addr = sorted_funcs[global_idx + 1][0]
+                    code = self.recompile_function(addr, info, next_func_addr=next_addr)
                     if code:
                         f.write(code)
                         f.write("\n\n")

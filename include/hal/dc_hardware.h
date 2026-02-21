@@ -133,6 +133,17 @@ typedef struct {
 #define SB_PDTNRM       0x005F6940
 #define SB_PDTEXT       0x005F6944
 
+/* PVR-DMA (System Bus DMA to/from PVR/TA) */
+#define SB_PDSTAP       0x005F7C00  /* PVR DMA PVR-side start addr */
+#define SB_PDSTAR       0x005F7C04  /* PVR DMA system memory start addr */
+#define SB_PDLEN        0x005F7C08  /* PVR DMA length */
+#define SB_PDDIR        0x005F7C0C  /* PVR DMA direction (0=to PVR, 1=from PVR) */
+#define SB_PDTSEL       0x005F7C10  /* PVR DMA trigger select */
+#define SB_PDEN         0x005F7C14  /* PVR DMA enable */
+#define SB_PDST         0x005F7C18  /* PVR DMA start trigger */
+
+/* Sort-DMA registers already defined above: SB_SDSTAG..SB_SDST */
+
 /* ========== Hardware Init/Access Functions ========== */
 
 typedef struct DCHardware DCHardware;

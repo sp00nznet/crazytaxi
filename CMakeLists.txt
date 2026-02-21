@@ -24,23 +24,49 @@ endif()
 include_directories(${CMAKE_SOURCE_DIR}/include)
 
 # ========== Find SDL2 (optional) ==========
-find_package(SDL2 QUIET)
+find_package(SDL2 QUIET CONFIG)
+if(NOT SDL2_FOUND)
+    find_package(SDL2 QUIET)
+endif()
 if(SDL2_FOUND)
-    message(STATUS "SDL2 found: ${SDL2_INCLUDE_DIRS}")
+    message(STATUS "SDL2 found")
     add_compile_definitions(HAS_SDL2)
-    include_directories(${SDL2_INCLUDE_DIRS})
 else()
     message(STATUS "SDL2 not found - building in headless mode")
+endif()
+
+# ========== Find OpenGL + GLEW ==========
+find_package(OpenGL QUIET)
+find_package(GLEW QUIET CONFIG)
+if(OPENGL_FOUND AND GLEW_FOUND)
+    message(STATUS "OpenGL + GLEW found")
+    add_compile_definitions(HAS_OPENGL)
+else()
+    message(STATUS "OpenGL/GLEW not found - rendering disabled")
 endif()
 
 # ========== Core library (CPU + HAL) ==========
 add_library(ct_core STATIC
     src/recompiler/sh4_cpu.c
     src/hal/dc_hardware.c
+    src/hal/pvr2_ta.c
+    src/hal/pvr2_render.c
     src/platform/platform_sdl2.c
 )
 if(MSVC)
     target_compile_options(ct_core PRIVATE /O2)
+endif()
+
+# ct_core needs SDL2/OpenGL headers for platform_sdl2.c
+if(SDL2_FOUND)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(ct_core PUBLIC SDL2::SDL2)
+    else()
+        target_include_directories(ct_core PUBLIC ${SDL2_INCLUDE_DIRS})
+    endif()
+endif()
+if(OPENGL_FOUND AND GLEW_FOUND)
+    target_link_libraries(ct_core PUBLIC OpenGL::GL GLEW::GLEW)
 endif()
 
 # ========== Recompiled game code ==========
@@ -86,8 +112,9 @@ else()
     target_link_options(crazytaxi PRIVATE -Wl,-z,stacksize=67108864)
 endif()
 
-if(SDL2_FOUND)
-    target_link_libraries(crazytaxi ${SDL2_LIBRARIES})
+# SDL2main needed for WinMain entry point
+if(SDL2_FOUND AND TARGET SDL2::SDL2main)
+    target_link_libraries(crazytaxi SDL2::SDL2main)
 endif()
 
 # Math library on Unix
