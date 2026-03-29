@@ -2,6 +2,8 @@
 
 A **static recompilation** of Crazy Taxi (Sega, 1999) from the original Dreamcast SH-4 binary to native x86-64 C code. This is **not** an emulator — the original game code is translated ahead-of-time into C functions that compile natively on modern hardware.
 
+Built on the [dcrecomp](https://github.com/sp00nznet/dcrecomp) framework for Dreamcast/Naomi static recompilation.
+
 ## Architecture
 
 ```
@@ -9,13 +11,15 @@ A **static recompilation** of Crazy Taxi (Sega, 1999) from the original Dreamcas
 │                   Crazy Taxi Game                    │
 │           (11,561 recompiled C functions)            │
 ├─────────────────────────────────────────────────────┤
-│                  SH-4 CPU State                      │
-│       (registers, memory map, FPU state)             │
+│              dcrecomp Framework (submodule)           │
 ├──────────────┬──────────────┬───────────────────────┤
 │  PowerVR2    │    AICA      │    Maple Bus           │
 │  GPU (Holly) │  Sound CPU   │  (Controllers)         │
 │  → OpenGL    │  → SDL2 Audio│  → SDL2 Input          │
 ├──────────────┴──────────────┴───────────────────────┤
+│         Flycast HW Subsystems (extracted)            │
+│    PVR2 / AICA / Holly / Maple / Naomi / Memory      │
+├─────────────────────────────────────────────────────┤
 │              Platform Layer (SDL2)                    │
 │         (Window, Input, Audio, Timing)               │
 └─────────────────────────────────────────────────────┘
@@ -26,7 +30,7 @@ A **static recompilation** of Crazy Taxi (Sega, 1999) from the original Dreamcas
 1. **Disc Extraction** — The GD-ROM disc image is parsed and all game files are extracted (1ST_READ.BIN, textures, models, sound, etc.)
 2. **SH-4 Disassembly** — The 1.47 MB game executable (SH-4 CPU) is disassembled and 11,561 functions are identified via prologue detection and call graph analysis
 3. **Static Recompilation** — Each SH-4 function is translated to an equivalent C function operating on a `SH4CPU` state struct. PC-relative data loads are resolved at recompile time.
-4. **Hardware Abstraction** — Dreamcast hardware (PVR2 GPU, AICA sound, Maple controllers, GD-ROM) is reimplemented using modern APIs (OpenGL, SDL2)
+4. **Hardware Abstraction** — Dreamcast hardware (PVR2 GPU, AICA sound, Maple controllers, GD-ROM) is handled by the dcrecomp framework, backed by extracted Flycast subsystems
 5. **Native Compilation** — The generated C code compiles with any standard C compiler (GCC, Clang, MSVC) to a native executable
 
 ### Key Differences from Emulation
@@ -45,13 +49,26 @@ A **static recompilation** of Crazy Taxi (Sega, 1999) from the original Dreamcas
 - CMake 3.16+
 - C compiler (GCC, Clang, or MSVC)
 - SDL2 (optional, for windowed mode)
+- OpenGL + GLEW (optional, for rendering)
+
+### Clone
+
+```bash
+git clone --recursive https://github.com/sp00nznet/crazytaxi.git
+cd crazytaxi
+```
+
+If you already cloned without `--recursive`:
+```bash
+git submodule update --init --recursive
+```
 
 ### Build
 
 ```bash
 mkdir build && cd build
-cmake ..
-cmake --build . --parallel
+cmake -G "Visual Studio 17 2022" -A x64 ..
+cmake --build . --config Release --parallel 8
 ```
 
 Without SDL2, the project builds in headless mode for testing.
@@ -68,33 +85,28 @@ Place the extracted game files in `disc_extract/` and run:
 
 ```
 crazytaxi/
-├── CMakeLists.txt              # Build system
+├── CMakeLists.txt              # Build system (links dcrecomp + game code)
+├── dcrecomp/                   # Framework submodule
+│   ├── include/                #   SH-4 CPU, HAL, platform headers
+│   ├── src/                    #   CPU state, hardware, PVR2, SDL2
+│   ├── flycast/                #   Extracted Flycast HW subsystems
+│   └── tools/                  #   Recompilation toolchain
 ├── include/
-│   ├── recompiler/
-│   │   └── sh4_cpu.h           # SH-4 CPU state structure
-│   ├── hal/
-│   │   └── dc_hardware.h       # Dreamcast hardware interface
-│   ├── game/
-│   │   └── game_functions.h    # 11,561 recompiled function declarations
-│   └── platform/
-│       └── platform.h          # Platform abstraction (SDL2/Win32)
+│   └── game/
+│       └── game_functions.h    # 12,681 recompiled function declarations
 ├── src/
 │   ├── main.c                  # Entry point & game loop
-│   ├── recompiler/
-│   │   └── sh4_cpu.c           # CPU state & memory access
-│   ├── hal/
-│   │   └── dc_hardware.c       # Hardware register emulation
-│   ├── game/
-│   │   ├── game_code_000.c     # Recompiled functions (batch 0)
-│   │   ├── ...                 # ... (24 source files total)
-│   │   ├── game_code_023.c     # Recompiled functions (batch 23)
-│   │   └── dispatch_table.c    # Address → function lookup table
-│   └── platform/
-│       └── platform_sdl2.c     # SDL2 windowing & input
+│   └── game/
+│       ├── game_code_000.c     # Recompiled functions (batch 0)
+│       ├── ...                 # ... (26 source files)
+│       ├── game_code_025.c     # Recompiled functions (batch 25)
+│       ├── dispatch_table.c    # Address → function lookup table
+│       └── game_stubs.c        # 5,708 stub functions
 └── tools/
     ├── extract_gdi.py          # GD-ROM disc image extractor
     ├── sh4_disasm.py           # SH-4 disassembler & analysis
-    └── static_recompile.py     # SH-4 → C static recompiler
+    ├── static_recompile.py     # SH-4 → C static recompiler
+    └── generate_stubs.py       # Stub generator for undefined refs
 ```
 
 ## Game Data
@@ -134,52 +146,61 @@ Original Dreamcast disc contents (extracted from GD-ROM Track 3):
 - [x] PC-relative data load resolution (MOV.L @(disp,PC))
 - [x] Floating-point instruction translation (FADD, FMUL, FDIV, FIPR, etc.)
 - [x] Function dispatch table (binary search lookup)
-- [x] Multi-file output (24 source files, parallel compilation)
+- [x] Multi-file output (26 source files, parallel compilation)
 
 ### Phase 2.5: Build & Compilation ✅
 - [x] CMake build system (MSVC / Visual Studio 17 2022)
 - [x] Multi-library split for parallel compilation (5 game libs)
 - [x] Label error post-processing (goto → function call conversion)
 - [x] Branch-outside-function → tail call conversion
-- [x] Successful full compilation (all 24 game source files + stubs compile)
-- [x] Stub generator for 5,693 undefined func references (BSR targets in data)
+- [x] Successful full compilation (all 26 game source files + stubs compile)
+- [x] Stub generator for 5,708 undefined func references (BSR targets in data)
 - [x] Linker pass — all symbols resolved
-- [x] First successful link → **4.6 MB crazytaxi.exe** output
+- [x] First successful link → **4.9 MB crazytaxi.exe** output
 - [x] Indirect jump/call dispatch fix (cpu->pc set for JMP/JSR @Rn, BRAF, BSRF)
 - [x] Self-tail-call → goto loop conversion (eliminates stack overflow from recursion)
 - [x] 64 MB stack size for deep recompiled call chains
 - [x] /MP multi-process MSVC compilation, /O1 for game code (faster builds)
 
-### Phase 3: CPU & Memory 🔧
+### Phase 3: CPU & Memory ✅
 - [x] SH-4 CPU state structure (registers, FPU, system regs)
 - [x] Dreamcast memory map (16MB RAM, 8MB VRAM, 2MB AICA)
+- [x] Configurable RAM size (16MB DC / 32MB Naomi via dcrecomp)
 - [x] Memory-mapped I/O routing
 - [x] P1/P2 address translation (cached/uncached mirrors)
-- [ ] Store Queue emulation (SQ → VRAM DMA)
-- [ ] Cache behavior (where game-visible)
+- [x] P4 on-chip resource handling (Store Queues, UTLB, DMAC, TMU)
+- [x] TLB/MMU support (UTLB 64-entry lookup when MMU enabled)
+- [x] Store Queue prefetch → TA FIFO / VRAM DMA
+- [x] Heuristic P0/P3 → RAM redirect (for TLB miss fallback)
 
-### Phase 4: Hardware Abstraction 🔧
+### Phase 4: Hardware Abstraction ✅ (via dcrecomp)
+- [x] dcrecomp framework integration (git submodule)
 - [x] Hardware register framework (SB, PVR, Maple, AICA, GD-ROM)
-- [x] PVR2 register stubs (ID, reset, framebuffer, render trigger)
+- [x] PVR2 register emulation (ID, reset, framebuffer, render trigger)
+- [x] SPG_STATUS register (scanline counter, vsync, field)
+- [x] Maple DMA with full JVS protocol (device info, controllers, EEPROM)
 - [x] Maple controller state (buttons, triggers, analog sticks)
 - [x] AICA ARM reset control
-- [x] Interrupt status registers (ISTNRM, ISTEXT, ISTERR)
-- [ ] PVR2 Tile Accelerator (vertex submission, polygon lists)
-- [ ] PVR2 rendering pipeline → OpenGL translation
+- [x] Interrupt status registers (ISTNRM, ISTEXT, ISTERR with write-clear)
+- [x] PVR2 Tile Accelerator FIFO parser (32-byte packets, all 18 vertex types)
+- [x] PVR2 OpenGL 3.3 renderer (colored triangles, depth, blending)
+- [x] PVR DMA → TA FIFO path
+- [x] Sort DMA → TA FIFO path
+- [x] CH2-DMA trigger detection
+- [x] TA FIFO direct word writes → packet assembly
+- [ ] CH2-DMA → TA data path (polygon submission)
 - [ ] Texture format conversion (PVR → OpenGL)
 - [ ] AICA sound channel mixing → SDL2 audio
-- [ ] ADPCM audio decoding
-- [ ] Maple DMA (controller polling protocol)
 - [ ] GD-ROM file access (redirect to extracted files)
 
-### Phase 5: Rendering Pipeline ❌
-- [ ] OpenGL 3.3 core renderer
-- [ ] PVR vertex format → GL vertex array conversion
-- [ ] Texture atlas / VQ texture decompression
-- [ ] Alpha sorting (opaque, translucent, punch-through lists)
-- [ ] Fog table implementation
-- [ ] Modifier volumes (shadow/light)
-- [ ] Framebuffer output (640x480 → window)
+### Phase 5: Flycast Integration 🔧
+- [x] Flycast subsystems extracted (PVR, AICA, Maple, Holly, Naomi, Memory)
+- [x] Flycast adapter header (C bridge to C++ subsystems)
+- [ ] Wire sh4_read/write through Flycast addrspace handlers
+- [ ] Flycast PVR2 renderer (OpenGL/Vulkan/DirectX backends)
+- [ ] Flycast AICA (64-channel sound, ARM7 DSP, ADPCM)
+- [ ] Flycast Holly interrupt controller (47 IRQ types)
+- [ ] Flycast scheduler adaptation (wall-clock instead of cycle-count)
 
 ### Phase 6: Audio ❌
 - [ ] AICA channel emulation (64 channels)
@@ -230,4 +251,4 @@ This project is for educational and preservation purposes. You must own a legiti
 
 ## License
 
-The recompilation tools and platform code are MIT licensed. The original game code and assets remain property of Sega.
+The recompilation tools and platform code are MIT licensed. The dcrecomp framework and Flycast subsystems are GPLv2. The original game code and assets remain property of Sega.
