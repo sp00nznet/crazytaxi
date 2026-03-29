@@ -54,7 +54,7 @@ static int load_game_binary(SH4CPU *cpu, const char *path) {
 
     /* Load at 0x8C010000 (offset 0x010000 in RAM) */
     uint32_t load_offset = GAME_LOAD_ADDR & cpu->ram_mask;
-    if (load_offset + size > (long)cpu->ram_size) {
+    if ((uint32_t)(load_offset + size) > cpu->ram_size) {
         fprintf(stderr, "ERROR: Binary too large (%ld bytes)\n", size);
         fclose(f);
         return -1;
