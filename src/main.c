@@ -145,6 +145,12 @@ static void dc_bios_init(SH4CPU *cpu) {
 int main(int argc, char *argv[]) {
     const char *datadir = GAME_DATA_DIR;
 
+    /* Unbuffered stdout: this process is normally killed rather than exited, and
+     * a block-buffered tail is lost exactly when the log matters most. _IOLBF is
+     * not honoured by the MSVC runtime and a zero size makes it reject the call
+     * outright, so _IONBF is the only setting that actually works here. */
+    setvbuf(stdout, NULL, _IONBF, 0);
+
     printf("=== %s ===\n", GAME_TITLE);
     printf("Static Recompilation (Sega Dreamcast / SH-4)\n");
     printf("Powered by dcrecomp framework\n\n");

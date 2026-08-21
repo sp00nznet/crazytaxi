@@ -20,6 +20,13 @@ else()
     endif()
 endif()
 
+# Logs any recompiled function that returns with a callee-saved register
+# changed - i.e. a missing entry point. Off by default, it is not cheap.
+option(ABI_CHECK "Check callee-saved registers across indirect calls" OFF)
+if(ABI_CHECK)
+    add_compile_definitions(DCRECOMP_ABI_CHECK)
+endif()
+
 # ========== dcrecomp framework (submodule) ==========
 add_subdirectory(dcrecomp)
 
@@ -54,7 +61,7 @@ if(GAME_SOURCES)
                 ${DCRECOMP_INCLUDE_DIR}
             )
             if(MSVC)
-                target_compile_options(${lib_name} PRIVATE /O1)
+                target_compile_options(${lib_name} PRIVATE /O1 /Zi)
             endif()
             list(APPEND GAME_LIBS ${lib_name})
         endif()
