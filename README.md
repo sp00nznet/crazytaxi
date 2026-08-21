@@ -246,6 +246,22 @@ FP ops:      34,349 (4.7%)
 Decode rate: 58.9% (rest is inline data)
 ```
 
+## Credits & prior art
+
+- **[Reverse Engineering Crazy Taxi](https://wretched.computer/post/crazytaxi)**
+  and **[noclip.website](https://github.com/magcius/noclip.website)** (Jasper St.
+  Pierre et al.) - reversed Crazy Taxi's `.all` archive and `.shp` model formats.
+  Any asset loading we implement is based on their findings.
+- **[CookiePLMonster/CT-DC](https://github.com/CookiePLMonster/CT-DC)** (Silent)
+  - Crazy Taxi Dreamcast Restoration; useful reference for the game's data
+  layout and cut content.
+- **[Flycast](https://github.com/flyinghead/flycast)** (flyinghead) - Dreamcast
+  hardware reference.
+- **[N64Recomp](https://github.com/N64Recomp/N64Recomp)** (Wiseguy) - the
+  approach.
+- **[tbg-decomp](https://github.com/lhsazevedo/tokyo-bus-guide-decomp)**
+  (lhsazevedo) - SH-4 decompilation methodology and test harness design.
+
 ## Legal
 
 This project is for educational and preservation purposes. You must own a legitimate copy of Crazy Taxi for Dreamcast. Game data files are not included in this repository.
