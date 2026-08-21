@@ -17,7 +17,7 @@ Built on the [dcrecomp](https://github.com/sp00nznet/dcrecomp) framework for Dre
 │  GPU (Holly) │  Sound CPU   │  (Controllers)         │
 │  → OpenGL    │  → SDL2 Audio│  → SDL2 Input          │
 ├──────────────┴──────────────┴───────────────────────┤
-│         Flycast HW Subsystems (extracted)            │
+│              dcrecomp HAL / PVR2                     │
 │    PVR2 / AICA / Holly / Maple / Naomi / Memory      │
 ├─────────────────────────────────────────────────────┤
 │              Platform Layer (SDL2)                    │
@@ -30,7 +30,7 @@ Built on the [dcrecomp](https://github.com/sp00nznet/dcrecomp) framework for Dre
 1. **Disc Extraction** — The GD-ROM disc image is parsed and all game files are extracted (1ST_READ.BIN, textures, models, sound, etc.)
 2. **SH-4 Disassembly** — The 1.47 MB game executable (SH-4 CPU) is disassembled and 11,561 functions are identified via prologue detection and call graph analysis
 3. **Static Recompilation** — Each SH-4 function is translated to an equivalent C function operating on a `SH4CPU` state struct. PC-relative data loads are resolved at recompile time.
-4. **Hardware Abstraction** — Dreamcast hardware (PVR2 GPU, AICA sound, Maple controllers, GD-ROM) is handled by the dcrecomp framework, backed by extracted Flycast subsystems
+4. **Hardware Abstraction** — Dreamcast hardware (PVR2 GPU, AICA sound, Maple controllers, GD-ROM) is handled by the dcrecomp framework
 5. **Native Compilation** — The generated C code compiles with any standard C compiler (GCC, Clang, MSVC) to a native executable
 
 ### Key Differences from Emulation
@@ -89,7 +89,6 @@ crazytaxi/
 ├── dcrecomp/                   # Framework submodule
 │   ├── include/                #   SH-4 CPU, HAL, platform headers
 │   ├── src/                    #   CPU state, hardware, PVR2, SDL2
-│   ├── flycast/                #   Extracted Flycast HW subsystems
 │   └── tools/                  #   Recompilation toolchain
 ├── include/
 │   └── game/
@@ -193,14 +192,16 @@ Original Dreamcast disc contents (extracted from GD-ROM Track 3):
 - [ ] AICA sound channel mixing → SDL2 audio
 - [ ] GD-ROM file access (redirect to extracted files)
 
-### Phase 5: Flycast Integration 🔧
-- [x] Flycast subsystems extracted (PVR, AICA, Maple, Holly, Naomi, Memory)
-- [x] Flycast adapter header (C bridge to C++ subsystems)
-- [ ] Wire sh4_read/write through Flycast addrspace handlers
-- [ ] Flycast PVR2 renderer (OpenGL/Vulkan/DirectX backends)
-- [ ] Flycast AICA (64-channel sound, ARM7 DSP, ADPCM)
-- [ ] Flycast Holly interrupt controller (47 IRQ types)
-- [ ] Flycast scheduler adaptation (wall-clock instead of cycle-count)
+### Phase 5: Accurate hardware backend 🔧
+- [ ] Wire sh4_read/write through a pluggable address-space handler table
+- [ ] Accurate PVR2 renderer (textures, fog, modifier volumes)
+- [ ] AICA sound (64-channel, ARM7 DSP, ADPCM)
+- [ ] Holly interrupt controller (47 IRQ types)
+- [ ] Scheduler (wall-clock instead of cycle-count)
+
+> Flycast is GPLv2. Any build that links its subsystems is a GPLv2 derivative
+> and must live in a separate GPLv2 repository - neither this repo nor dcrecomp
+> ships Flycast code.
 
 ### Phase 6: Audio ❌
 - [ ] AICA channel emulation (64 channels)
@@ -251,4 +252,9 @@ This project is for educational and preservation purposes. You must own a legiti
 
 ## License
 
-The recompilation tools and platform code are MIT licensed. The dcrecomp framework and Flycast subsystems are GPLv2. The original game code and assets remain property of Sega.
+MIT - see [LICENSE](LICENSE).
+
+Covers the code in this repository that we wrote: the bootstrap, build system,
+and tooling. It does **not** cover `src/game/` - that is machine-translated from
+Sega's copyrighted binary and is not ours to license. The dcrecomp framework is
+separately MIT. Original game code and assets remain the property of Sega.
