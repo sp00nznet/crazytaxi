@@ -41,6 +41,28 @@ void sh4_jump_indirect(SH4CPU *cpu);
 static SH4CPU g_cpu;
 static DCHardware *g_hw = NULL;
 
+/* VBlank/IRQ entry.
+ *
+ * On hardware the SH-4 takes interrupts through VBR+0x600. Crazy Taxi sets
+ * VBR = 0x8C00F400 (ldc r0,VBR at 0x8C010110), so the vector sits at
+ * 0x8C00FA00 - below the 0x8C010000 load address, in a trampoline the game
+ * copies into low RAM at boot. The recompiler never saw it, so the dispatcher
+ * behind it was dead code.
+ *
+ * The real entry is 0x8C16A590: seven register pushes falling through into the
+ * dispatcher at 0x8C16A59E, which reads SB_ISTNRM and calls func_8C169F40 for
+ * VBlank. That ISR increments the frame counter at 0x0C2E7E90 that every
+ * "wait N frames" loop in init spins on. Reproduce the pushes here rather than
+ * hand-editing generated code.
+ */
+static void ct_irq_handler(SH4CPU *cpu) {
+    for (int i = 14; i >= 8; i--) {
+        cpu->r[15] -= 4;
+        sh4_write32(cpu, cpu->r[15], cpu->r[i]);
+    }
+    func_8C16A59E(cpu);
+}
+
 static int load_game_binary(SH4CPU *cpu, const char *path) {
     FILE *f = fopen(path, "rb");
     if (!f) {
@@ -175,6 +197,9 @@ int main(int argc, char *argv[]) {
 
     /* Set up BIOS state and entry point */
     dc_bios_init(&g_cpu);
+
+    /* Deliver VBlank to the game's own IRQ dispatcher */
+    sh4_set_irq_handler(ct_irq_handler);
 
     printf("[BOOT] Starting game execution at 0x%08X...\n\n", g_cpu.pc);
     fflush(stdout);
