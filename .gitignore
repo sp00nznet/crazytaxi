@@ -30,3 +30,4 @@ Thumbs.db
 
 # Temporary analysis files
 *.tmp
+build/smoke_test.log

@@ -65,13 +65,23 @@ git submodule update --init --recursive
 
 ### Build
 
+Needs SDL2, GLEW and OpenGL. Via vcpkg:
+
+```bash
+vcpkg install sdl2 glew opengl --triplet x64-windows
+```
+
 ```bash
 mkdir build && cd build
-cmake -G "Visual Studio 17 2022" -A x64 ..
+cmake -G "Visual Studio 17 2022" -A x64 -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake ..
 cmake --build . --config Release --parallel 8
 ```
 
-Without SDL2, the project builds in headless mode for testing.
+Confirm the configure output says `SDL2 found` and `OpenGL + GLEW found`.
+Without them the project still builds, but headless with rendering disabled -
+useful for tracing, useless for seeing anything. CMake caches a failed search,
+so if you configured once without the toolchain file, configure into a fresh
+build directory rather than re-running in place.
 
 ### Running
 
