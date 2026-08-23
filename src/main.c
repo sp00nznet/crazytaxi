@@ -15,6 +15,7 @@
 
 #include "recompiler/sh4_cpu.h"
 #include "hal/dc_hardware.h"
+#include "hal/dc_bios.h"
 #include "hal/pvr2.h"
 #include "platform/platform.h"
 #include "game/game_functions.h"
@@ -203,6 +204,12 @@ int main(int argc, char *argv[]) {
 
     /* Set up BIOS state and entry point */
     dc_bios_init(&g_cpu);
+
+    /* The BIOS leaves a table of syscall entry points in low RAM; games reach
+     * flash settings and the GD-ROM drive through it. Booting without a BIOS
+     * leaves it zeroed, so those calls land on address 0. */
+    sh4_bios_install_vectors(&g_cpu);
+    sh4_bios_set_gdrom_track("Crazy Taxi (USA) (Track 3).bin", 45000);
 
     /* Deliver VBlank to the game's own IRQ dispatcher */
     sh4_set_irq_handler(ct_irq_handler);
