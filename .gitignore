@@ -1,15 +1,20 @@
-# Original disc image files (copyrighted)
+# Original disc image files (copyrighted), and archives of them
 *.bin
 *.cue
 *.gdi
 *.iso
 *.cdi
+*.chd
+*.7z
+*.zip
+*.rar
 
 # Extracted raw disc contents
 disc_extract/
 
 # Build artifacts
 build/
+build_*/
 *.o
 *.obj
 *.exe
@@ -31,3 +36,13 @@ Thumbs.db
 # Temporary analysis files
 *.tmp
 build/smoke_test.log
+
+# Recompiled game source. This is a machine translation of the game's own
+# executable - a derivative of it - so it is not distributed here. Generate it
+# from your own copy of the disc: see the build steps in README.md.
+src/game/
+include/game/
+
+# Python bytecode
+__pycache__/
+*.pyc
