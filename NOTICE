@@ -1,0 +1,13 @@
+crazytaxi
+Copyright (c) 2025-2026 sp00nz
+Licensed under the GNU General Public License, version 2 (see LICENSE).
+
+Builds against dcrecomp (https://github.com/sp00nznet/dcrecomp, GPL-2.0),
+included as the dcrecomp/ submodule. Parts of dcrecomp's hardware layer are
+derived from Flycast (GPL-2.0); dcrecomp's NOTICE lists them.
+
+Before 2026-08-24 this repository carried its own copies of dcrecomp's HAL and
+recompiler (src/hal/, src/recompiler/, include/, tools/static_recompile.py and
+others). Those copies remain in history under GPL-2.0, for the same reason.
+
+Crazy Taxi is (c) Sega. No game code or data is in this repository.

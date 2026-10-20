@@ -1,0 +1,24 @@
+# No disc in CI, so nothing here can build the game: the generated C comes
+# from your own copy. This checks the tools parse and that the smoke test
+# reports SKIP (not a pass, not a crash) without game data.
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Python syntax
+        run: python -m py_compile (Get-ChildItem tools -Filter *.py).FullName
+      - name: Smoke test skips without the disc
+        run: |
+          $out = python tools/smoke_test.py
+          $out
+          if ($LASTEXITCODE -ne 0 -or -not ($out -match '^SKIP:')) { exit 1 }

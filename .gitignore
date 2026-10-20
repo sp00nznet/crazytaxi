@@ -46,3 +46,9 @@ include/game/
 # Python bytecode
 __pycache__/
 *.pyc
+
+# netlab build output, the quick start's log, launcher and private vcpkg
+build-farm/
+setup.log
+Play Crazy Taxi.cmd
+.deps/

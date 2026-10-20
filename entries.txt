@@ -1,0 +1,55 @@
+# Crazy Taxi (US) entry points static analysis can't find. Passed to
+# dcrecomp's static_recompile.py with --entries; see dcrecomp docs/entries.md.
+0x8C148990  # Main loop entry (BRA target from init)
+0x8C14ACEE  # Init function (JMP target from func_8C148988)
+0x8C14AD46  # Main game loop (JMP target from func_8C148990)
+0x8C02A808  # Indirect JSR target from game init
+0x8C02A698  # Game main() - dead code entry in func_8C02A680
+0x8C02A6EC  # Game main loop body (BRA target from func_8C02A760)
+# Functions detected as unresolved indirect call targets at runtime:
+0x8C080BA4  # memcmp (CRT0 runtime)
+0x8C07A870  # Hardware init (writes constants)
+0x8C07A570  # Veneer (BRA to 0x8C07A4A0 with r4=0)
+0x8C07A580  # Setter (writes to TA FIFO base)
+0x8C07A590  # Setter (writes r5 to memory, returns 1)
+0x8C073B10  # Veneer (BRA to 0x8C073910 with r7=0)
+0x8C073910  # Target of 0x8C073B10 veneer
+0x8C07A4A0  # Target of 0x8C07A570 veneer
+0x8C15ED94  # SDK runtime function (called ~80x per frame)
+0x8C15EA50  # SDK runtime function
+0x8C15EC28  # SDK runtime function
+0x8C14D214  # Init function
+0x8C15F258  # SDK runtime function
+0x8C15E56C  # SDK runtime function
+0x8C15EEDC  # SDK runtime function
+0x8C07A5A0  # Setter function (near 0x8C07A590)
+0x8C14D240  # Cache flush continuation (P2 jump target from func_8C14D214)
+# Session 3: unresolved targets discovered at runtime
+0x8C087E9C  # Init helper (called frequently from 0x8C0875F4)
+0x8C1566A0  # SDK/init function
+0x8C15B282  # SDK function (called via jsr @r3)
+0x8C15B27C  # SDK function (called via jsr @r3)
+0x8C16C138  # SDK runtime function
+0x8C07A5F0  # Setter function (near 0x8C07A5A0)
+0x8C07A600  # Setter function
+0x8C07A610  # Setter function (called ~9 times)
+0x8C07A630  # Setter function
+0x8C1587BA  # SDK function
+0x8C15645C  # SDK function
+0x8C14B434  # Init function
+0x8C14BB4C  # Init function
+0x8C16C300  # SDK runtime function
+0x8C16F5FC  # SDK runtime function
+0x8C1564C6  # PVR register write helper
+# Session 3 round 2: more unresolved targets
+0x8C153160  # SDK function
+0x8C156080  # SDK function
+0x8C15B368  # SDK function
+0x8C16DF10  # SDK function
+0x8C150246  # Init function
+0x8C080B2E  # CRT function
+0x8C073EB0  # Game init function
+0x8C074050  # Game init function
+0x8C075820  # Game function
+0x8C086BD8  # Game function
+0x8C156406  # Rendering callback registration?

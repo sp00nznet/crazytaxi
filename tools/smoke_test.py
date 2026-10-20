@@ -39,6 +39,11 @@ CHECKS = [
 
 
 def main():
+    # No disc on this machine (CI, a netlab test VM): nothing to boot. SKIP is
+    # not a pass - netlab's QA_SKIP matches this line.
+    if not (ROOT / "disc_extract/1ST_READ.BIN").exists():
+        print("SKIP: disc_extract/1ST_READ.BIN not here - extract your own disc first")
+        return 0
     if not EXE.exists():
         print(f"FAIL: {EXE} not found - build first")
         return 1
@@ -65,6 +70,8 @@ def main():
         if not ok:
             print(f"      {hint}")
             failed += 1
+
+    print(f"\n{len(CHECKS) - failed}/{len(CHECKS)} passed")
 
     # Informational, not a check: init returning is the next milestone.
     print(f"\ninit returned: {'yes' if 'Game init returned' in log else 'not yet'}")
