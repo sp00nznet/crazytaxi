@@ -6,14 +6,16 @@ and nothing decodes an SH-4 instruction at runtime. The game's 12,750 functions
 are turned into C functions ahead of time and compiled by MSVC.
 
 Built on [dcrecomp](https://github.com/sp00nznet/dcrecomp), which does the
-translating and provides the hardware layer.
+translating and provides the hardware layer, and follows its house style: game
+repos hold only the bring-up code and title-specific data, fixes to the
+recompiler go to dcrecomp.
 
-**This one does not draw a frame yet.** It boots, sets up its interrupt handler,
-reads the disc and gets a long way into initialisation, then stops in a wait
-loop it never leaves. If you want to see the framework actually rendering a
-game, that is the ChuChu Rocket project, which does.
+## Status
 
-## State
+Alpha, no tagged release. **It does not draw a frame yet**, so there are no
+screenshots. It boots, sets up its interrupt handler, reads the disc and gets a
+long way into initialisation, then stops in a wait loop it never leaves. For
+the framework rendering a game, see the ChuChu Rocket project.
 
 Working:
 
@@ -34,62 +36,127 @@ Not working:
 There is a smoke test that pins the above down, so a regression is obvious:
 
 ```
-python tools/smoke_test.py
+py -3 tools\smoke_test.py
 ```
 
 It checks the binary loads, the handler is registered, the `0x8C1583F8` loop
 clears, the TA sees packets, and no call on the interrupt path goes unresolved.
-All five pass today.
+5/5 pass (2026-10-20). Without the disc it prints `SKIP` and exits 0, which is
+what CI and netlab's test VMs see.
 
-## Building
+## Getting Started
 
-You need your own copy of the game. Nothing in this repository will produce a
-playable binary on its own, and no game data is distributed here.
+You need your own Crazy Taxi (US) disc image (`.cue` + `.bin`, or `.gdi`).
+Nothing in this repository is game data, and nothing here downloads any.
+
+### Quick start
+
+1. Download this repository ([zip](https://github.com/sp00nznet/crazytaxi/archive/refs/heads/main.zip))
+   and unzip it. Put your disc's `.cue`/`.bin` files in the same folder if you
+   like - Setup finds them there.
+2. Double-click **`Setup.cmd`**. It checks for Python, Git, CMake, the Visual
+   Studio C++ build tools and vcpkg, and **asks** before installing any that are
+   missing (it says how big each is). If it can't find your disc, it asks for
+   the path.
+3. When it says `Done.`, double-click **`Play Crazy Taxi.cmd`**.
+
+If it stops, it says what to do in one sentence; the details are in
+`setup.log`. Run it again after fixing that: steps already done are skipped.
+The first build takes 10-20 minutes.
+
+### Step by step
+
+These are the commands Setup runs. Prerequisites:
+
+- Windows 10/11, x64
+- Python 3.8+ (`py -3 --version`)
+- Git, CMake 3.16+
+- Visual Studio 2022 (or its Build Tools) with *Desktop development with C++*
+- vcpkg with SDL2 and GLEW: `vcpkg install sdl2:x64-windows glew:x64-windows`
+
+1. Get the code, with the dcrecomp submodule:
+
+   ```
+   git clone --recursive https://github.com/sp00nznet/crazytaxi
+   cd crazytaxi
+   ```
+
+2. Extract the disc:
+
+   ```
+   py -3 dcrecomp\tools\extract_gdi.py "Crazy Taxi (US).cue" disc_extract
+   ```
+   ```
+   === Disc layout ===
+     track  1: LBA       0..    449  data
+     track  2: LBA     450..  1,125  audio
+     track  3: LBA  45,000..549,149  data
+   ...
+   Done! Extracted 105,229,316 bytes total
+   ```
+
+3. Translate the executable to C (writes the gitignored `src/game/` and
+   `include/game/`). `entries.txt` lists the entry points only reachable at
+   runtime (dcrecomp `docs/entries.md`):
+
+   ```
+   py -3 dcrecomp\tools\static_recompile.py disc_extract\1ST_READ.BIN src\game include\game --entries entries.txt
+   py -3 tools\generate_stubs.py
+   ```
+   ```
+   Static recompilation complete!
+     Functions: 12750
+     Mid-function entries: 13442
+     Source files: 26
+     Output: src\game/
+   ...
+     Added 31 declarations
+   ```
+
+4. Build:
+
+   ```
+   cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_TOOLCHAIN_FILE=<vcpkg>\scripts\buildsystems\vcpkg.cmake
+   cmake --build build --config Release --parallel
+   ```
+
+   The result is `build\Release\crazytaxi.exe`.
+
+Usual trip-ups:
+
+- **`python` opens the Microsoft Store**, or does nothing: that's Windows' app
+  alias. Use `py -3`, or turn the alias off in *Settings > Apps > Advanced app
+  settings > App execution aliases*.
+- **A tool you just installed isn't found**: PATH changes reach new windows
+  only. Open a new terminal.
+- **No window when you run it**: CMake didn't find SDL2, so it built the
+  headless configuration. Pass the vcpkg toolchain file, and delete `build\`
+  if it was configured without it.
+- **A zip download has an empty `dcrecomp\` folder**: run Setup (it fetches the
+  right commit), or use `git clone --recursive`.
+
+## Usage
 
 ```
-# 1. Extract the disc.
-python dcrecomp/tools/extract_gdi.py disc.cue disc_extract
-
-# 2. Translate the executable to C. Writes src/game/ and include/game/.
-python dcrecomp/tools/static_recompile.py
-python tools/generate_stubs.py
-
-# 3. Build.
-cmake -B build -G "Visual Studio 17 2022" -A x64 \
-      -DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake
-cmake --build build --config Release --parallel 8
+build\Release\crazytaxi.exe             # run; reads disc_extract\ from the current folder
+build\Release\crazytaxi.exe <datadir>   # read the extracted disc from elsewhere
+py -3 tools\smoke_test.py                # boot test: 5 checks, prints n/5 passed
 ```
 
-SDL2 and GLEW come from vcpkg. Without the toolchain file CMake silently
-configures a headless build, so if you get no window, that is why.
+Debug switches (watchpoints, stack sampling, screenshots, the ABI check) are in
+[docs/debugging.md](docs/debugging.md).
 
-The recompiler lives in `dcrecomp/tools/` and is the only copy. `tools/` here
-holds what is specific to this game: the stub generator, the smoke test, and a
-couple of disc-parsing debug scripts.
+## Building from source
 
-`src/main.c` is the bring-up file: entry point, RAM size, BIOS vectors, and the
-interrupt handler registration. It is the only hand-written game-specific code
-here.
+The step-by-step route above is the build. `src/main.c` is the bring-up file:
+entry point, RAM size, BIOS vectors and the interrupt handler registration -
+the only hand-written game-specific C here. `tools/` holds the stub generator,
+the smoke test, the setup script, and two disc-parsing debug scripts.
 
-## Debugging
-
-dcrecomp carries the tools that get used on this. All off by default:
-
-| Variable | What it does |
-| --- | --- |
-| `DCRECOMP_HWREG` | first write to each hardware register |
-| `DCRECOMP_STACKEVERY=N` | the call chain interrupted, every Nth interrupt |
-| `DCRECOMP_WATCH=addr` | write watchpoint, with the chain that did it |
-| `DCRECOMP_SCREENSHOT=f.ppm` | write the frame to a PPM |
-| `-DABI_CHECK=ON` | flag a function returning with a callee-saved register or SP changed |
-
-A crash prints the faulting context, a backtrace walked from it, and the last
-24 indirect-call targets - usually the only useful part, because MSVC's tail
-calls flatten the native stack even when it is intact.
-
-`DCRECOMP_STACKEVERY` is what identified the loop above: the same call chain on
-every sample means the game has stopped making progress, and the chain names
-the function to read.
+On the lab, [recomp-netlab](https://github.com/sp00nznet/recomp-netlab) builds
+it with `netlab build crazytaxi` (clang-cl, headless configuration: SDL2 isn't
+on the builders) and `netlab check crazytaxi --on testbox` runs the smoke test.
+The disc and `disc_extract\` are never sent.
 
 ## Credits and prior art
 
@@ -100,9 +167,9 @@ this, credit them too.
   (sonicfreak1337) - the other Dreamcast static recompiler, and further along.
   Worth reading before assuming anything here is novel.
 - **[Flycast](https://github.com/flyinghead/flycast)** (flyinghead, GPLv2) - the
-  reference for how this hardware actually behaves. No Flycast code is used
-  here, but the PowerVR2, Holly and AICA register semantics were learned from
-  it.
+  reference for how this hardware actually behaves. dcrecomp's hardware
+  layer is derived from it (dcrecomp's NOTICE), which is why both repos are
+  GPL-2.0.
 - **[N64Recomp](https://github.com/N64Recomp/N64Recomp)** (Wiseguy) -
   established the static-recompilation-as-preservation approach this copies.
 - **[tbg-decomp](https://github.com/lhsazevedo/tokyo-bus-guide-decomp)**
@@ -118,10 +185,12 @@ Sega, and no game code or data is distributed here.
 
 ## Licence
 
-MIT - see [LICENSE](LICENSE).
+GPL-2.0 - see [LICENSE](LICENSE) and [NOTICE](NOTICE). It builds against
+dcrecomp, which is GPL-2.0 because parts of its hardware layer are derived from
+Flycast. This repository was MIT until 2026-10-20.
 
-That covers what is actually in this repository: the build files, `src/main.c`,
-`tools/`, and the documentation. It grants no rights to anything produced by
-running the recompiler over a commercial disc image - that output is a
-translation of Sega's executable and remains Sega's. Bring your own copy and
-generate it yourself.
+That covers what is in this repository: the build files, `src/main.c`,
+`entries.txt`, `tools/` and the documentation. It grants no rights to anything
+produced by running the recompiler over a commercial disc image - that output
+is a translation of Sega's executable and remains Sega's. Bring your own copy
+and generate it yourself.

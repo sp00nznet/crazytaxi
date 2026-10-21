@@ -31,8 +31,13 @@ function Run($what, $exe, [string[]]$argv) {
     Say $what
     $q = $argv | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } }
     "   $exe $($q -join ' ')" | Add-Content $Log
-    $p = Start-Process -FilePath $exe -ArgumentList $q -NoNewWindow -Wait -PassThru `
+    # Not -Wait: that also waits for every child, and MSBuild leaves node
+    # processes running for ~15 minutes after cmake is done. Touching .Handle
+    # first is what makes ExitCode readable in 5.1.
+    $p = Start-Process -FilePath $exe -ArgumentList $q -NoNewWindow -PassThru `
          -RedirectStandardOutput "$Log.out" -RedirectStandardError "$Log.err"
+    $null = $p.Handle
+    $p.WaitForExit()
     Get-Content "$Log.out", "$Log.err" | Add-Content $Log
     Remove-Item "$Log.out", "$Log.err" -ErrorAction SilentlyContinue
     if ($p.ExitCode -ne 0) { Fail "$what failed (exit code $($p.ExitCode))." }
